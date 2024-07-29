@@ -126,6 +126,12 @@ def christofides(distance_matrix):
 
 
 def find_optimal_path(df, shelves, start_shelf, boundaries):
+
+    start = True
+    if start_shelf not in shelves:
+        start = False
+        shelves.append(start_shelf)
+
     df_filtered = df[df['Regal/Fach/Boden'].isin(shelves + [start_shelf])]
 
     print("Calculating distance matrix...")
@@ -144,6 +150,11 @@ def find_optimal_path(df, shelves, start_shelf, boundaries):
     optimal_shelves = [df_filtered.iloc[i]['Regal/Fach/Boden'] for i in optimal_path_indices]
     optimal_distance = sum(distance_matrix[optimal_path_indices[i], optimal_path_indices[i + 1]]
                            for i in range(len(optimal_path_indices) - 1))
+
+    if not start:
+        optimal_shelves = optimal_shelves[1:-1]  # Remove the starting shelf from the path
+    else:
+        optimal_shelves = optimal_shelves[:-1]
 
     return optimal_shelves, optimal_distance
 
