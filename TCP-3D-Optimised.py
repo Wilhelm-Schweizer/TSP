@@ -41,7 +41,6 @@ boundaries = [
 def approximately_equal(a, b, tolerance=1e-3):
     return abs(a - b) < tolerance
 
-
 @lru_cache(maxsize=None)
 def do_lines_intersect_region(S, E, L1, L2, tolerance=1e-3):
     sx, sy, sz = S
@@ -54,25 +53,20 @@ def do_lines_intersect_region(S, E, L1, L2, tolerance=1e-3):
     if np.isclose(X1, X2, atol=tolerance) and (sx - Xave) * (ex - Xave) < 0:
         minSEy, maxSEy = min(sy, ey) - tolerance, max(sy, ey) + tolerance
         minY, maxY = min(Y1, Y2) - tolerance, max(Y1, Y2) + tolerance
-        return np.any(np.arange(minSEy, maxSEy, tolerance) >= minY) and np.any(
-            np.arange(minSEy, maxSEy, tolerance) <= maxY)
+        return np.any(np.arange(minSEy, maxSEy, tolerance) >= minY) and np.any(np.arange(minSEy, maxSEy, tolerance) <= maxY)
 
     elif np.isclose(Y1, Y2, atol=tolerance) and (sy - Yave) * (ey - Yave) < 0:
         minSEx, maxSEx = min(sx, ex) - tolerance, max(sx, ex) + tolerance
         minX, maxX = min(X1, X2) - tolerance, max(X1, X2) + tolerance
-        return np.any(np.arange(minSEx, maxSEx, tolerance) >= minX) and np.any(
-            np.arange(minSEx, maxSEx, tolerance) <= maxX)
+        return np.any(np.arange(minSEx, maxSEx, tolerance) >= minX) and np.any(np.arange(minSEx, maxSEx, tolerance) <= maxX)
 
     return False
-
 
 def is_passable(node1, node2, boundaries):
     return not any(do_lines_intersect_region(node1, node2, boundary[0], boundary[1]) for boundary in boundaries)
 
-
 def heuristic(a, b):
     return np.sum(np.abs(np.array(a) - np.array(b)))
-
 
 def a_star_3d(start, goal, boundaries):
     open_set = [(0, start)]
@@ -84,9 +78,7 @@ def a_star_3d(start, goal, boundaries):
     while open_set:
         current = heappop(open_set)[1]
 
-        if approximately_equal(current[0], goal[0]) and approximately_equal(current[1],
-                                                                            goal[1]) and approximately_equal(current[2],
-                                                                                                             goal[2]):
+        if approximately_equal(current[0], goal[0]) and approximately_equal(current[1], goal[1]) and approximately_equal(current[2], goal[2]):
             path = []
             while current in came_from:
                 path.append(current)
@@ -110,11 +102,9 @@ def a_star_3d(start, goal, boundaries):
 
     return None
 
-
 @lru_cache(maxsize=None)
 def cached_a_star_3d(start, goal, boundaries_tuple):
     return a_star_3d(start, goal, boundaries_tuple)
-
 
 def calculate_distance(i, j, coords, aisles, boundaries_tuple):
     path = cached_a_star_3d(tuple(coords[i]), tuple(coords[j]), boundaries_tuple)
@@ -164,7 +154,6 @@ def two_opt(route, distance_callback):
         route = best
     return best
 
-
 def nearest_neighbor_tsp(distance_matrix, start_index):
     num_shelves = distance_matrix.shape[0]
     path = [start_index]
@@ -204,7 +193,6 @@ def find_optimal_path(df, shelves, start_shelf, boundaries):
 
     # Solve the TSP using Nearest Neighbor Algorithm with a fixed starting point
     optimal_path_indices, optimal_distance = nearest_neighbor_tsp(distance_matrix, start_index)
-
     # Map the optimal path back to the shelf coordinates
     optimal_shelves = [df_filtered.iloc[i]['Regal/Fach/Boden'] for i in optimal_path_indices]
 
@@ -310,8 +298,8 @@ def main():
     shelves_to_visit = [
     # ['1/1/1', '1/2/1', '1/3/1'],
     # ['3/1/1', '3/4/1', '4/2/1', '5/1/1', '21/2/1', '7/2/1'],
-    # ['4/1/1', '4/1/7', '5/1/4'],
-    ['1/1/1', '1/4/1', '2/1/1', '3/4/1']
+    ['4/1/1', '4/1/7', '5/1/4'],
+    # ['1/1/1', '1/4/1', '2/1/1', '3/4/1']
 ]
 
     start_shelf = '1/1/1'
