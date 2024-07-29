@@ -9,6 +9,9 @@ import random
 import heapq
 from datetime import datetime as dt
 from heapq import heappush, heappop
+from functools import lru_cache
+import multiprocessing as mp
+from functools import partial
 
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', 1000)
@@ -39,56 +42,47 @@ def approximately_equal(a, b, tolerance=1e-3):
     return abs(a - b) < tolerance
 
 
+@lru_cache(maxsize=None)
 def do_lines_intersect_region(S, E, L1, L2, tolerance=1e-3):
     sx, sy, sz = S
     ex, ey, ez = E
     X1, Y1 = L1
     X2, Y2 = L2
 
-    Xave = np.average([X1, X2])
-    Yave = np.average([Y1, Y2])
+    Xave = (X1 + X2) / 2
+    Yave = (Y1 + Y2) / 2
     if np.isclose(X1, X2, atol=tolerance) and (sx - Xave) * (ex - Xave) < 0:
-        minSEy = min(sy, ey) - tolerance
-        maxSEy = max(sy, ey) + tolerance
-        minY = min(Y1, Y2) - tolerance
-        maxY = max(Y1, Y2) + tolerance
-        return np.intersect1d(np.arange(minSEy, maxSEy, tolerance), np.arange(minY, maxY, tolerance)).__len__() > 0
+        minSEy, maxSEy = min(sy, ey) - tolerance, max(sy, ey) + tolerance
+        minY, maxY = min(Y1, Y2) - tolerance, max(Y1, Y2) + tolerance
+        return np.any(np.arange(minSEy, maxSEy, tolerance) >= minY) and np.any(
+            np.arange(minSEy, maxSEy, tolerance) <= maxY)
 
     elif np.isclose(Y1, Y2, atol=tolerance) and (sy - Yave) * (ey - Yave) < 0:
-        minSEx = min(sx, ex) - tolerance
-        maxSEx = max(sx, ex) + tolerance
-        minX = min(X1, X2) - tolerance
-        maxX = max(X1, X2) + tolerance
-        return np.intersect1d(np.arange(minSEx, maxSEx, tolerance), np.arange(minX, maxX, tolerance)).__len__() > 0
+        minSEx, maxSEx = min(sx, ex) - tolerance, max(sx, ex) + tolerance
+        minX, maxX = min(X1, X2) - tolerance, max(X1, X2) + tolerance
+        return np.any(np.arange(minSEx, maxSEx, tolerance) >= minX) and np.any(
+            np.arange(minSEx, maxSEx, tolerance) <= maxX)
 
     return False
 
 
 def is_passable(node1, node2, boundaries):
-    zAvg = np.average([node1[2], node2[2]])
-    for boundary in boundaries:
-        if do_lines_intersect_region(node1, node2, boundary[0], boundary[1]):
-            # print(f"Path from {node1} to {node2} intersects boundary {boundary}")
-            return False
-    return True
+    return not any(do_lines_intersect_region(node1, node2, boundary[0], boundary[1]) for boundary in boundaries)
 
 
 def heuristic(a, b):
-    return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+    return np.sum(np.abs(np.array(a) - np.array(b)))
 
 
 def a_star_3d(start, goal, boundaries):
-    if start == (0.3, 3.58, 2.6) and goal == (0.35, 3.85, 2.6):
-        print("Hello")
-
-    open_set = []
-    heapq.heappush(open_set, (0, start))
+    open_set = [(0, start)]
     came_from = {}
     g_score = {start: 0}
     f_score = {start: heuristic(start, goal)}
+    closed_set = set()
 
     while open_set:
-        _, current = heapq.heappop(open_set)
+        current = heappop(open_set)[1]
 
         if approximately_equal(current[0], goal[0]) and approximately_equal(current[1],
                                                                             goal[1]) and approximately_equal(current[2],
@@ -98,13 +92,13 @@ def a_star_3d(start, goal, boundaries):
                 path.append(current)
                 current = came_from[current]
             path.append(start)
-            path.reverse()
-            return path
+            return path[::-1]
 
-        neighbors = [(current[0] + dx, current[1] + dy, current[2] + dz) for dx, dy, dz in
-                     [(-0.01, 0, 0), (0.01, 0, 0), (0, -0.01, 0), (0, 0.01, 0), (0, 0, -0.2), (0, 0, 0.2)]]
-        for neighbor in neighbors:
-            if not is_passable(current, neighbor, boundaries):
+        closed_set.add(current)
+
+        for dx, dy, dz in [(-0.01, 0, 0), (0.01, 0, 0), (0, -0.01, 0), (0, 0.01, 0), (0, 0, -0.2), (0, 0, 0.2)]:
+            neighbor = (current[0] + dx, current[1] + dy, current[2] + dz)
+            if neighbor in closed_set or not is_passable(current, neighbor, boundaries):
                 continue
 
             tentative_g_score = g_score[current] + heuristic(current, neighbor)
@@ -112,51 +106,84 @@ def a_star_3d(start, goal, boundaries):
                 came_from[neighbor] = current
                 g_score[neighbor] = tentative_g_score
                 f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, goal)
-                heapq.heappush(open_set, (f_score[neighbor], neighbor))
+                heappush(open_set, (f_score[neighbor], neighbor))
 
     return None
 
+
+@lru_cache(maxsize=None)
+def cached_a_star_3d(start, goal, boundaries_tuple):
+    return a_star_3d(start, goal, boundaries_tuple)
+
+
+def calculate_distance(i, j, coords, aisles, boundaries_tuple):
+    path = cached_a_star_3d(tuple(coords[i]), tuple(coords[j]), boundaries_tuple)
+    if path:
+        manhattan_distance = len(path) - 1
+        aisle_penalty = 1000 * np.abs(aisles[i] - aisles[j])
+        return i, j, manhattan_distance + aisle_penalty
+    else:
+        return i, j, np.inf
 
 def calculate_manhattan_distance_matrix_with_boundaries(df, boundaries):
     coords = df[['X', 'Y', 'Z']].values
     aisles = df['Aisle'].values
     num_shelves = len(coords)
-    distance_matrix = np.zeros((num_shelves, num_shelves))
+    distance_matrix = np.full((num_shelves, num_shelves), np.inf)
 
-    for i in range(num_shelves):
-        for j in range(num_shelves):
-            if i < j:
-                path = a_star_3d((coords[i][0], coords[i][1], coords[i][2]), (coords[j][0], coords[j][1], coords[j][2]),
-                                 boundaries)
-                if path:
-                    manhattan_distance = len(path) - 1
-                    aisle_penalty = 1000 * np.abs(aisles[i] - aisles[j])  # Adjust the penalty as needed
-                    distance_matrix[i, j] = distance_matrix[j, i] = manhattan_distance + aisle_penalty
-                else:
-                    distance_matrix[i, j] = np.inf  # No valid path found
-            elif i == j:
-                distance_matrix[i, j] = np.inf  # Avoid zero distance to itself
+    boundaries_tuple = tuple(tuple(map(tuple, boundary)) for boundary in boundaries)
+
+    # Prepare arguments for multiprocessing
+    args = [(i, j, coords, aisles, boundaries_tuple)
+            for i in range(num_shelves)
+            for j in range(i+1, num_shelves)]
+
+    # Use multiprocessing to calculate distances
+    with mp.Pool(processes=mp.cpu_count()) as pool:
+        results = pool.starmap(calculate_distance, args)
+
+    # Fill the distance matrix with results
+    for i, j, distance in results:
+        distance_matrix[i, j] = distance_matrix[j, i] = distance
 
     return distance_matrix
+
+def two_opt(route, distance_callback):
+    best = route
+    improved = True
+    while improved:
+        improved = False
+        for i in range(1, len(route) - 2):
+            for j in range(i + 1, len(route)):
+                if j - i == 1: continue
+                new_route = route[:]
+                new_route[i:j] = route[j - 1:i - 1:-1]
+                if distance_callback(new_route) < distance_callback(best):
+                    best = new_route
+                    improved = True
+        route = best
+    return best
 
 
 def nearest_neighbor_tsp(distance_matrix, start_index):
     num_shelves = distance_matrix.shape[0]
-    visited = [False] * num_shelves
     path = [start_index]
-    visited[start_index] = True
-    current = start_index
+    unvisited = set(range(num_shelves)) - {start_index}
 
-    while len(path) < num_shelves:
-        nearest = np.argmin([distance_matrix[current, j] if not visited[j] else np.inf for j in range(num_shelves)])
+    while unvisited:
+        current = path[-1]
+        nearest = min(unvisited, key=lambda x: distance_matrix[current, x])
         path.append(nearest)
-        visited[nearest] = True
-        current = nearest
+        unvisited.remove(nearest)
 
-    path.append(start_index)  # Return to the starting point
-    total_distance = sum(distance_matrix[path[i], path[i + 1]] for i in range(num_shelves))
-    return path, total_distance
+    path.append(start_index)
 
+    # Apply 2-opt optimization
+    distance_callback = lambda r: sum(distance_matrix[r[i], r[i + 1]] for i in range(len(r) - 1))
+    optimized_path = two_opt(path, distance_callback)
+
+    total_distance = distance_callback(optimized_path)
+    return optimized_path, total_distance
 
 def find_optimal_path(df, shelves, start_shelf, boundaries):
     # Add starting shelf if not present
@@ -273,32 +300,38 @@ def visualize_path(df, boundaries, path):
     plt.show()
 
 
-# Example usage
-shelves_to_visit = [
+
+
+def main():
+    # Your main code here
+    df = pd.read_excel(r'Stamm_Lagerorte.xlsx')
+
+    # Example usage
+    shelves_to_visit = [
     # ['1/1/1', '1/2/1', '1/3/1'],
     # ['3/1/1', '3/4/1', '4/2/1', '5/1/1', '21/2/1', '7/2/1'],
-    ['4/1/1', '4/1/7', '5/1/4'],
-    # ['1/1/1', '1/4/1', '2/1/1', '3/4/1']
+    # ['4/1/1', '4/1/7', '5/1/4'],
+    ['1/1/1', '1/4/1', '2/1/1', '3/4/1']
 ]
 
-start_shelf = '1/1/1'
+    start_shelf = '1/1/1'
 
-for shelves_list in shelves_to_visit:
-    # Randomly shuffle list
-    desired = shelves_list.copy()
-    random.shuffle(shelves_list)
+    for shelves_list in shelves_to_visit:
+        # Randomly shuffle list
+        desired = shelves_list.copy()
+        random.shuffle(shelves_list)
+
+        start = dt.now()
+
+        optimal_shelves, optimal_distance = find_optimal_path(df, shelves_list.copy(), start_shelf, boundaries)
+
+        print("Time taken:", dt.now() - start)
+
+        print("Shelves to Visit:", shelves_list, 'Desired Path:', desired, "Output Path:", optimal_shelves,
+              'Output = Desired:', desired == optimal_shelves)
+
+        visualize_path_3d(df, boundaries, [start_shelf] + optimal_shelves)
 
 
-    start = dt.now()
-
-    optimal_shelves, optimal_distance = find_optimal_path(df, shelves_list.copy(), start_shelf, boundaries)
-
-    print("Time taken:", dt.now() - start)
-
-    print("Shelves to Visit:", shelves_list, 'Desired Path:', desired, "Output Path:", optimal_shelves,
-          'Output = Desired:', desired == optimal_shelves)
-
-    # Visualize the result
-    # visualize_path(df, boundaries, [start_shelf] + optimal_shelves )
-
-    visualize_path_3d(df, boundaries, [start_shelf] + optimal_shelves)
+if __name__ == '__main__':
+    main()
