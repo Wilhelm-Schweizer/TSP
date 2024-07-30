@@ -1,9 +1,14 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 import plotly.graph_objects as go
 import random
 import heapq
+import itertools
+
+df = pd.read_excel(r'Stamm_Lagerorte.xlsx')  # Import Dataframe
 
 
 # Define a function to check if two line segments intersect with a given tolerance
@@ -33,15 +38,18 @@ def do_lines_intersect(p1, p2, q1, q2, tolerance=1e-5):
     # If neither condition is met, the segments do not intersect
     return False
 
+
 def is_passable(node1, node2, boundaries):
     for boundary in boundaries:
         if do_lines_intersect(node1, node2, boundary[0], boundary[1]):
             return False
     return True
 
+
 def heuristic(a, b):
     # Manhattan distance heuristic function
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
 
 def a_star(start, goal, boundaries):
     open_set = []
@@ -75,6 +83,7 @@ def a_star(start, goal, boundaries):
 
     return None
 
+
 # Function to calculate the Manhattan distance matrix with boundary consideration using A* algorithm
 def calculate_manhattan_distance_matrix_with_boundaries(df, boundaries):
     coords = df[['X', 'Y', 'Z']].values
@@ -86,21 +95,19 @@ def calculate_manhattan_distance_matrix_with_boundaries(df, boundaries):
         for j in range(i, num_shelves):
             if i == j:
                 distance_matrix[i, j] = np.inf  # Avoid zero distance to itself
-            else: # i < j
+            else:  # i < j
                 path = a_star((coords[i][0], coords[i][1]), (coords[j][0], coords[j][1]), boundaries)
-                if np.all(np.isclose((coords[i][0],coords[i][1]), (0.35, 3.85), atol=1e-5)) and np.all(np.isclose((coords[j][0],coords[j][1]), (1.58, 6.4), atol=1e-5)) or \
-                    np.all(np.isclose((coords[i][0],coords[i][1]), (2.7,3.58), atol=1e-5)) and np.all(np.isclose((coords[j][0],coords[j][1]), (2.7,3.85), atol=1e-5)):
-                    print([(format(np.round(point[0],2), 'g'), format(np.round(point[1],2), 'g')) for point in path])
                 if path:
                     manhattan_distance = len(path) - 1
                     aisle_penalty = 1000 * np.abs(aisles[i] - aisles[j])  # Adjust the penalty as needed
                     distance_matrix[i, j] = manhattan_distance + aisle_penalty
-                    print(f"({coords[i][0]},{coords[i][1]}) => ({coords[j][0]},{coords[j][1]}) : {distance_matrix[i, j]}")
+                    # print(f"({coords[i][0]},{coords[i][1]}) => ({coords[j][0]},{coords[j][1]}) : {distance_matrix[i, j]}")
                 else:
                     distance_matrix[i, j] = np.inf  # No valid path found
                 distance_matrix[j, i] = distance_matrix[i, j]
 
     return distance_matrix
+
 
 # Nearest Neighbor Algorithm with a fixed starting point
 def nearest_neighbor_tsp(distance_matrix, start_index):
@@ -120,6 +127,15 @@ def nearest_neighbor_tsp(distance_matrix, start_index):
     total_distance = sum(distance_matrix[path[i], path[i + 1]] for i in range(num_shelves))
     return path, total_distance
 
+
+def calculate_route_distance(route, distance_matrix):
+    """Calculate the total distance of the given route based on the distance matrix."""
+    total_distance = 0
+    for i in range(len(route) - 1):
+        total_distance += distance_matrix[route[i]][route[i + 1]]
+    return total_distance
+
+
 # Function to find the optimal path for a given list of shelves with a fixed starting point
 def find_optimal_path(df, shelves, start_shelf, boundaries):
     # Add starting shelf if not present
@@ -133,10 +149,14 @@ def find_optimal_path(df, shelves, start_shelf, boundaries):
 
     # Calculate the Manhattan distance matrix with boundary consideration
     distance_matrix = calculate_manhattan_distance_matrix_with_boundaries(df_filtered, boundaries)
-    print(distance_matrix)
+    # print(distance_matrix)
 
+    print(len(df_filtered))
+    df_filtered_reset = df_filtered.reset_index(drop=True)
     # Find the index of the starting shelf
-    start_index = df_filtered[df_filtered['Regal/Fach/Boden'] == start_shelf].index[0]
+    start_index = df_filtered_reset[df_filtered_reset['Regal/Fach/Boden'] == start_shelf].index[0]
+
+    print("Start Index, ", start_index)
 
     # Solve the TSP using Nearest Neighbor Algorithm with a fixed starting point
     optimal_path_indices, optimal_distance = nearest_neighbor_tsp(distance_matrix, start_index)
@@ -152,20 +172,124 @@ def find_optimal_path(df, shelves, start_shelf, boundaries):
     return optimal_shelves, optimal_distance
 
 
+def distance(a, b):
+    return np.linalg.norm(np.array(b) - np.array(a))
 
-def visualize_path_3d(df, boundaries, path):
+
+# def assign_scores(df, start_shelf, boundaries):
+#
+#     for i,r in df.iterrows():
+#         start = (df[df['Regal/Fach/Boden'] == (start_shelf)][['X', 'Y', 'Z']].values)[0]
+#         current = (df[df['Regal/Fach/Boden'] == (r['Regal/Fach/Boden'])][['X', 'Y', 'Z']].values)[0]
+#
+#         Xmin = min(min(x1, x2) for (x1, y1), (x2, y2) in boundaries)
+#         Xmax = max(max(x1, x2) for (x1, y1), (x2, y2) in boundaries)
+#         Xave = (Xmax + Xmin) / 2
+#         scoreAisle = abs(Xave - current[0]) * 10
+#         scoreDist = distance(start, current) * 100
+#         scoreGround = current[2] * 10
+#         score = scoreDist * 0.33 + scoreAisle * 0.33 + scoreGround * 0.33
+#
+#
+#
+#
+#         df.at[i, 'Score'] = score
+#
+#     return df
+
+def assign_scores(df, start_shelf, boundaries):
+    # Step 1: Calculate all distances from the aisle and store them
+    aisle_distances = []
+    start_distances = []
+
+    # Find the middle of the aisle
+    Xmin = min(min(x1, x2) for (x1, y1), (x2, y2) in boundaries)
+    Xmax = max(max(x1, x2) for (x1, y1), (x2, y2) in boundaries)
+    Xave = (Xmax + Xmin) / 2
+
+    # Find the starting point
+    start = df[df['Regal/Fach/Boden'] == start_shelf][['X', 'Y', 'Z']].values[0]
+
+    for i, r in df.iterrows():
+        current = df.loc[i, ['X', 'Y', 'Z']].values
+        distance_from_aisle = abs(Xave - current[0])
+        distance_from_start = distance(start, current)
+
+        aisle_distances.append(distance_from_aisle)
+        start_distances.append(distance_from_start)
+
+    # Normalize the aisle distances to a 0-100 scale
+    max_aisle_distance = max(aisle_distances)
+    min_aisle_distance = min(aisle_distances)
+    normalized_aisle_scores = [(1 - (d - min_aisle_distance) / (max_aisle_distance - min_aisle_distance)) * 100 for d in aisle_distances]
+
+    # Normalize the start distances to a 0-100 scale
+    max_start_distance = max(start_distances)
+    min_start_distance = min(start_distances)
+    normalized_start_scores = [(1 - (d - min_start_distance) / (max_start_distance - min_start_distance)) * 100 for d in start_distances]
+
+    # Step 2: Calculate the scores
+    for i, r in df.iterrows():
+        current = df.loc[i, ['X', 'Y', 'Z']].values
+
+        # Ground score
+        if current[2] < 0.3:
+            scoreGround = 0
+        elif (current[2] > 0.3) and (current[2] < 0.6):
+            scoreGround =25
+
+        elif (current[2] > 0.6) and (current[2] <0.9):
+            scoreGround = 50
+        elif (current[2] > 0.9) and (current[2] < 1.1):
+            scoreGround = 75
+        elif (current[2] > 1.1) and (current[2]< 1.5):
+            scoreGround = 100
+        elif (current[2] > 1.5) and (current[2]< 1.7):
+            scoreGround = 50
+        elif (current[2] > 1.7) and (current[2] < 1.9):
+            scoreGround = 25
+        elif current[2] > 1.9:
+            scoreGround = 0
+
+        # Get the normalized aisle and start scores
+        scoreAisle = normalized_aisle_scores[i]
+        scoreDist = normalized_start_scores[i]
+
+        # Calculate the final score
+        score = scoreDist * 0.33 + scoreAisle * 0.33 + scoreGround * 0.33
+
+
+        # print(r, score, scoreGround, scoreAisle, scoreDist)
+
+        # Assign the score to the dataframe
+        df.at[i, 'Score'] = score
+
+    return df
+
+# Function to visualize the shelves, boundaries, and path
+def visualize_path_3d(df, boundaries, path, start_shelf):
     fig = go.Figure()
 
+    # Normalize scores for color mapping
+    norm = Normalize(vmin=df['Score'].min(), vmax=df['Score'].max())
+    cmap = plt.get_cmap('RdYlGn')  # Red to Green colormap
+
     # Add scatter plot for shelves (assuming Z is in df)
-    fig.add_trace(go.Scatter3d(
-        x=df['X'],
-        y=df['Y'],
-        z=df['Z'],
-        mode='markers+text',
-        marker=dict(size=5, color='blue'),
-        text=df['Regal/Fach/Boden'],
-        name='Shelves'
-    ))
+    for index, shelf in df.iterrows():
+        color = cmap(norm(shelf['Score']))
+        color_rgb = f'rgb({color[0] * 255}, {color[1] * 255}, {color[2] * 255})'
+        fig.add_trace(go.Scatter3d(
+            x=[shelf['X']],
+            y=[shelf['Y']],
+            z=[shelf['Z']],
+            mode="markers+text",
+            marker=dict(
+                size=5,
+                color=color_rgb
+            ),
+            text=shelf['Regal/Fach/Boden'],
+            name="Shelves"
+        ))
 
     # Assume a fixed Z value for all boundary points
     z_value = 0  # You can set this to any constant value appropriate for your visualization
@@ -225,7 +349,8 @@ def visualize_path(df, boundaries, path):
     for i in range(len(path) - 1):
         start_shelf = df[df['Regal/Fach/Boden'] == path[i]]
         end_shelf = df[df['Regal/Fach/Boden'] == path[i + 1]]
-        plt.plot([start_shelf['X'].values[0], end_shelf['X'].values[0]], [start_shelf['Y'].values[0], end_shelf['Y'].values[0]], 'g-')
+        plt.plot([start_shelf['X'].values[0], end_shelf['X'].values[0]],
+                 [start_shelf['Y'].values[0], end_shelf['Y'].values[0]], 'g-')
 
     plt.xlabel('X Coordinate')
     plt.ylabel('Y Coordinate')
@@ -233,9 +358,10 @@ def visualize_path(df, boundaries, path):
     plt.title('Optimal Path Visualization')
     plt.show()
 
+
 # Define boundaries as a list of line segments (start and end points)
 boundaries = [
-    #Walls
+    # Walls
     ((0, 0), (0, 12)),
     ((0, 12), (7, 12)),
     ((0, 0), (7, 0)),
@@ -256,18 +382,27 @@ if __name__ == "__main__":
     pd.set_option('display.width', 1000)
     pd.set_option('display.max_rows', None)
 
-    df = pd.read_excel(r'Stamm_Lagerorte.xlsx') # Import Dataframe
-
     # Example usage
     shelves_to_visit = [
-        # ['1/1/1',  '1/2/1', '1/3/1'],
-        ['3/1/1', '3/4/1', '4/2/1', '5/1/1', '21/2/1', '7/2/1'],
-        # ['4/1/1', '4/1/7', '5/1/4'],
-        # ['1/1/1', '1/4/1', '2/1/1', '3/4/1'],
-        # ['1/1/1','1/1/3','1/1/5','1/3/1','1/3/3','1/3/5']
+        # ['1/1/1', '1/2/1', '1/3/1'],
+        # ['3/1/1', '3/4/1', '4/2/1', '5/1/1', '21/2/1', '7/2/1','14/2/1'],
+        ['4/1/1', '4/1/7', '5/1/4'],
+        # ['1/1/1', '1/4/1', '2/1/1', '3/4/1']
     ]
 
-    start_shelf = '1/1/1'
+    start_shelf = 'Startpoint'
+
+    df.loc[df['Regal/Fach/Boden'] == 'Startpoint', 'X'] = 4
+    df.loc[df['Regal/Fach/Boden'] == 'Startpoint', 'Y'] = 2
+
+
+    #in df row where regal is Staretpoint replace x value
+    df = assign_scores(df,start_shelf,boundaries)
+    # print(df.tail())
+    #
+    # breakpoint()
+
+
 
     for shelves_list in shelves_to_visit:
         # Randomly shuffle list
@@ -276,7 +411,7 @@ if __name__ == "__main__":
 
         optimal_shelves, optimal_distance = find_optimal_path(df, shelves_list.copy(), start_shelf, boundaries)
         print("Shelves to Visit:", shelves_list, 'Desired Path:', desired, "Output Path:", optimal_shelves,
-            'Output = Desired:', desired == optimal_shelves)
+              'Output = Desired:', desired == optimal_shelves)
 
         # Visualize the result
-        visualize_path_3d(df, boundaries, [start_shelf] + optimal_shelves)
+        visualize_path_3d(df, boundaries, [start_shelf] + optimal_shelves, start_shelf)
