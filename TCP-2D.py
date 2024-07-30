@@ -1,80 +1,49 @@
 import pandas as pd
 import numpy as np
-from scipy.spatial.distance import pdist, squareform
-from itertools import permutations
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import random
 import heapq
-from heapq import heappush, heappop
-from datetime import datetime as dt
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', 1000)
-pd.set_option('display.max_rows', None)
-
-df = pd.read_excel(r'Stamm_Lagerorte.xlsx')
-
-boundaries = [
-    # Walls
-    ((0, 0), (0, 12)),
-    ((0, 12), (7, 12)),
-    ((0, 0), (7, 0)),
-    ((7, 0), (7, 12)),
-    # Shelves
-    ((0, 3.7), (3, 3.7)),
-    ((0, 5), (3, 5)),
-    ((0, 6.6), (3, 6.6)),
-    ((0, 8), (3, 8)),
-    ((0, 9.5), (3, 9.5)),
-    ((5, 9.65), (7, 9.65)),
-    ((5, 7), (7, 7)),
-    ((5, 5.5), (7, 5.5)),
-]
 
 
-# Define approximately_equal function
-def approximately_equal(a, b, tolerance=1e-10):
-    return abs(a - b) < tolerance
+# Define a function to check if two line segments intersect with a given tolerance
+def do_lines_intersect(p1, p2, q1, q2, tolerance=1e-5):
+    # Helper function to determine if three points are in a counterclockwise order
+    def ccw(a, b, c):
+        return (c[1] - a[1]) * (b[0] - a[0]) > (b[1] - a[1]) * (c[0] - a[0])
 
+    # Helper function to check if a point (px, py) lies on the segment (ax, ay) - (bx, by)
+    # considering a tolerance for floating-point precision issues
+    def point_on_segment(px, py, ax, ay, bx, by):
+        return min(ax, bx) - tolerance <= px <= max(ax, bx) + tolerance and \
+            min(ay, by) - tolerance <= py <= max(ay, by) + tolerance
 
-def do_lines_intersect_region(S, E, L1, L2, tolerance=1e-3):
-    sx, sy, sz = S
-    ex, ey, ez = E
-    X1, Y1 = L1
-    X2, Y2 = L2
+    # Check if the line segments (p1, p2) and (q1, q2) intersect by using the CCW test
+    if ccw(p1, q1, q2) != ccw(p2, q1, q2) and ccw(p1, p2, q1) != ccw(p1, p2, q2):
+        return True
 
-    Xave = np.average([X1, X2])
-    Yave = np.average([Y1, Y2])
-    if np.isclose(X1, X2, atol=tolerance) and (sx - Xave) * (ex - Xave) <= 0:
-        minSEy = min(sy, ey)
-        maxSEy = max(sy, ey)
-        minY = min(Y1, Y2)
-        maxY = max(Y1, Y2)
-        return max(minSEy, minY) <= min(maxSEy, maxY)
+    # Additionally, check if any endpoint of one segment lies on the other segment
+    # This accounts for the case when segments are collinear or overlapping
+    if point_on_segment(p1[0], p1[1], q1[0], q1[1], q2[0], q2[1]) or \
+            point_on_segment(p2[0], p2[1], q1[0], q1[1], q2[0], q2[1]) or \
+            point_on_segment(q1[0], q1[1], p1[0], p1[1], p2[0], p2[1]) or \
+            point_on_segment(q2[0], q2[1], p1[0], p1[1], p2[0], p2[1]):
+        return True
 
-    elif np.isclose(Y1, Y2, atol=tolerance) and (sy - Yave) * (ey - Yave) <= 0:
-        minSEx = min(sx, ex)
-        maxSEx = max(sx, ex)
-        minX = min(X1, X2)
-        maxX = max(X1, X2)
-        return max(minSEx, minX) <= min(maxSEx, maxX)
-
+    # If neither condition is met, the segments do not intersect
     return False
 
-
 def is_passable(node1, node2, boundaries):
-    zAvg = np.average([node1[2], node2[2]])
     for boundary in boundaries:
-        if do_lines_intersect_region(node1, node2, boundary[0], boundary[1]):
+        if do_lines_intersect(node1, node2, boundary[0], boundary[1]):
             return False
     return True
 
-
 def heuristic(a, b):
-    return abs(a[0] - b[0]) + abs(a[1] - b[1]) + abs(a[2] - b[2])
+    # Manhattan distance heuristic function
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
-
-def a_star_3d(start, goal, boundaries):
+def a_star(start, goal, boundaries):
     open_set = []
     heapq.heappush(open_set, (0, start))
     came_from = {}
@@ -82,21 +51,17 @@ def a_star_3d(start, goal, boundaries):
     f_score = {start: heuristic(start, goal)}
 
     while open_set:
-        _, current = heapq.heappop(open_set)
+        current = heapq.heappop(open_set)[1]
 
-        if approximately_equal(current[0], goal[0]) and approximately_equal(current[1],
-                                                                            goal[1]) and approximately_equal(current[2],
-                                                                                                             goal[2]):
+        if np.all(np.isclose(current, goal, atol=1e-5)):
             path = []
             while current in came_from:
                 path.append(current)
                 current = came_from[current]
             path.append(start)
-            path.reverse()
-            return path
+            return path[::-1]
 
-        neighbors = [(current[0] + dx, current[1] + dy, current[2] + dz) for dx, dy, dz in
-                     [(-0.01, 0, 0), (0.01, 0, 0), (0, -0.01, 0), (0, 0.01, 0), (0, 0, -0.2), (0, 0, 0.2)]]
+        neighbors = [(current[0] + dx, current[1] + dy) for dx, dy in [(-0.01, 0), (0.01, 0), (0, -0.01), (0, 0.01)]]
         for neighbor in neighbors:
             if not is_passable(current, neighbor, boundaries):
                 continue
@@ -110,7 +75,7 @@ def a_star_3d(start, goal, boundaries):
 
     return None
 
-
+# Function to calculate the Manhattan distance matrix with boundary consideration using A* algorithm
 def calculate_manhattan_distance_matrix_with_boundaries(df, boundaries):
     coords = df[['X', 'Y', 'Z']].values
     aisles = df['Aisle'].values
@@ -118,27 +83,26 @@ def calculate_manhattan_distance_matrix_with_boundaries(df, boundaries):
     distance_matrix = np.zeros((num_shelves, num_shelves))
 
     for i in range(num_shelves):
-        for j in range(num_shelves):
-            if i < j:
-                path = a_star_3d((coords[i][0], coords[i][1], coords[i][2]), (coords[j][0], coords[j][1], coords[j][2]),
-                                 boundaries)
+        for j in range(i, num_shelves):
+            if i == j:
+                distance_matrix[i, j] = np.inf  # Avoid zero distance to itself
+            else: # i < j
+                path = a_star((coords[i][0], coords[i][1]), (coords[j][0], coords[j][1]), boundaries)
+                if np.all(np.isclose((coords[i][0],coords[i][1]), (0.35, 3.85), atol=1e-5)) and np.all(np.isclose((coords[j][0],coords[j][1]), (1.58, 6.4), atol=1e-5)) or \
+                    np.all(np.isclose((coords[i][0],coords[i][1]), (2.7,3.58), atol=1e-5)) and np.all(np.isclose((coords[j][0],coords[j][1]), (2.7,3.85), atol=1e-5)):
+                    print([(format(np.round(point[0],2), 'g'), format(np.round(point[1],2), 'g')) for point in path])
                 if path:
-                    if (coords[i][0], coords[i][1], coords[i][2]) == (0.3, 3.58, 2.6) and (
-                    coords[j][0], coords[j][1], coords[j][2]) == (0.35, 3.85, 2.6):
-                        for point in path:
-                            print(point[0], point[1], point[2])
                     manhattan_distance = len(path) - 1
                     aisle_penalty = 1000 * np.abs(aisles[i] - aisles[j])  # Adjust the penalty as needed
-                    distance_matrix[i, j] = distance_matrix[j, i] = manhattan_distance + aisle_penalty
-                    # print(f"({coords[i][0]},{coords[i][1]},{coords[i][2]}) => ({coords[j][0]},{coords[j][1]},{coords[j][2]}) : {distance_matrix[i, j]}")
+                    distance_matrix[i, j] = manhattan_distance + aisle_penalty
+                    print(f"({coords[i][0]},{coords[i][1]}) => ({coords[j][0]},{coords[j][1]}) : {distance_matrix[i, j]}")
                 else:
                     distance_matrix[i, j] = np.inf  # No valid path found
-            elif i == j:
-                distance_matrix[i, j] = np.inf  # Avoid zero distance to itself
+                distance_matrix[j, i] = distance_matrix[i, j]
 
     return distance_matrix
 
-
+# Nearest Neighbor Algorithm with a fixed starting point
 def nearest_neighbor_tsp(distance_matrix, start_index):
     num_shelves = distance_matrix.shape[0]
     visited = [False] * num_shelves
@@ -156,7 +120,7 @@ def nearest_neighbor_tsp(distance_matrix, start_index):
     total_distance = sum(distance_matrix[path[i], path[i + 1]] for i in range(num_shelves))
     return path, total_distance
 
-
+# Function to find the optimal path for a given list of shelves with a fixed starting point
 def find_optimal_path(df, shelves, start_shelf, boundaries):
     # Add starting shelf if not present
     start = True
@@ -188,7 +152,7 @@ def find_optimal_path(df, shelves, start_shelf, boundaries):
     return optimal_shelves, optimal_distance
 
 
-# Function to visualize the shelves, boundaries, and path
+
 def visualize_path_3d(df, boundaries, path):
     fig = go.Figure()
 
@@ -199,8 +163,7 @@ def visualize_path_3d(df, boundaries, path):
         z=df['Z'],
         mode='markers+text',
         marker=dict(size=5, color='blue'),
-        # text=df['Regal/Fach/Boden'],
-        text="",
+        text=df['Regal/Fach/Boden'],
         name='Shelves'
     ))
 
@@ -262,8 +225,7 @@ def visualize_path(df, boundaries, path):
     for i in range(len(path) - 1):
         start_shelf = df[df['Regal/Fach/Boden'] == path[i]]
         end_shelf = df[df['Regal/Fach/Boden'] == path[i + 1]]
-        plt.plot([start_shelf['X'].values[0], end_shelf['X'].values[0]],
-                 [start_shelf['Y'].values[0], end_shelf['Y'].values[0]], 'g-')
+        plt.plot([start_shelf['X'].values[0], end_shelf['X'].values[0]], [start_shelf['Y'].values[0], end_shelf['Y'].values[0]], 'g-')
 
     plt.xlabel('X Coordinate')
     plt.ylabel('Y Coordinate')
@@ -271,29 +233,50 @@ def visualize_path(df, boundaries, path):
     plt.title('Optimal Path Visualization')
     plt.show()
 
-
-# Example usage
-shelves_to_visit = [
-    # ['1/1/1', '1/2/1', '1/3/1'],
-    # ['3/1/1', '3/4/1', '4/2/1', '5/1/1', '21/2/1', '7/2/1'],
-    # ['4/1/1', '4/1/7', '5/1/4'],
-    ['1/1/1', '1/4/1', '2/1/1', '3/4/1']
+# Define boundaries as a list of line segments (start and end points)
+boundaries = [
+    #Walls
+    ((0, 0), (0, 12)),
+    ((0, 12), (7, 12)),
+    ((0, 0), (7, 0)),
+    ((7, 0), (7, 12)),
+    # Shelves
+    ((0, 3.7), (3, 3.7)),
+    ((0, 5), (3, 5)),
+    ((0, 6.6), (3, 6.6)),
+    ((0, 8), (3, 8)),
+    ((0, 9.5), (3, 9.5)),
+    ((5, 9.65), (7, 9.65)),
+    ((5, 7), (7, 7)),
+    ((5, 5.5), (7, 5.5)),
 ]
 
-start_shelf = '1/1/1'
+if __name__ == "__main__":
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', 1000)
+    pd.set_option('display.max_rows', None)
 
-for shelves_list in shelves_to_visit:
-    # Randomly shuffle list
-    desired = shelves_list.copy()
-    random.shuffle(shelves_list)
-    start = dt.now()
-    optimal_shelves, optimal_distance = find_optimal_path(df, shelves_list.copy(), start_shelf, boundaries)
+    df = pd.read_excel(r'Stamm_Lagerorte.xlsx') # Import Dataframe
 
-    print("Time taken:", dt.now() - start)
-    print("Shelves to Visit:", shelves_list, 'Desired Path:', desired, "Output Path:", optimal_shelves,
-          'Output = Desired:', desired == optimal_shelves)
+    # Example usage
+    shelves_to_visit = [
+        # ['1/1/1',  '1/2/1', '1/3/1'],
+        ['3/1/1', '3/4/1', '4/2/1', '5/1/1', '21/2/1', '7/2/1'],
+        # ['4/1/1', '4/1/7', '5/1/4'],
+        # ['1/1/1', '1/4/1', '2/1/1', '3/4/1'],
+        # ['1/1/1','1/1/3','1/1/5','1/3/1','1/3/3','1/3/5']
+    ]
 
-    # Visualize the result
-    # visualize_path(df, boundaries, [start_shelf] + optimal_shelves )
+    start_shelf = '1/1/1'
 
-    visualize_path_3d(df, boundaries, [start_shelf] + optimal_shelves)
+    for shelves_list in shelves_to_visit:
+        # Randomly shuffle list
+        desired = shelves_list.copy()
+        random.shuffle(shelves_list)
+
+        optimal_shelves, optimal_distance = find_optimal_path(df, shelves_list.copy(), start_shelf, boundaries)
+        print("Shelves to Visit:", shelves_list, 'Desired Path:', desired, "Output Path:", optimal_shelves,
+            'Output = Desired:', desired == optimal_shelves)
+
+        # Visualize the result
+        visualize_path_3d(df, boundaries, [start_shelf] + optimal_shelves)
